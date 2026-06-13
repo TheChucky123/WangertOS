@@ -44,7 +44,7 @@ def get_wallpaper_color():
             g = int((avg_color.green() * 0.2) + (15 * 0.8))
             b = int((avg_color.blue() * 0.2) + (20 * 0.8))
             hr = min(255, r + 60)
-            hg = min(255, g + 60)
+            hg = min(255, g + 70)
             hb = min(255, b + 70)
             return (r, g, b), (hr, hg, hb)
     return (base_r, base_g, base_b), (137, 180, 250)
@@ -123,6 +123,31 @@ class AutoCloseMenu(QWidget):
             self.hide()
         return super().event(e)
 
+# ==========================================
+# 2. NEU: HIER IST DIE AKKU-LOGIK
+# ==========================================
+def get_battery_info():
+    try:
+        base_path = "/sys/class/power_supply"
+        if not os.path.exists(base_path): return ""
+        for ps in os.listdir(base_path):
+            if ps.startswith("BAT"):
+                cap_path = os.path.join(base_path, ps, "capacity")
+                stat_path = os.path.join(base_path, ps, "status")
+                if os.path.exists(cap_path) and os.path.exists(stat_path):
+                    with open(cap_path, "r") as f: cap = f.read().strip()
+                    with open(stat_path, "r") as f: stat = f.read().strip()
+                    
+                    # Status ermitteln (Laden / Entladen)
+                    icon = "🔋"
+                    status_str = ""
+                    if stat == "Charging": status_str = " ⚡"
+                    elif stat == "Full" or stat == "Not charging": status_str = " 🔌"
+                    
+                    return f"{icon} {cap}%{status_str}"
+    except: pass
+    return ""
+
 def has_hardware(hw_type):
     try:
         output = subprocess.check_output(['rfkill', 'list', hw_type]).decode('utf-8')
@@ -197,7 +222,8 @@ class StartMenu(AutoCloseMenu):
         self.setStyleSheet(f"QWidget {{ background-color: {MENU_BG}; color: {TEXT_COLOR}; font-family: 'Segoe UI', Arial; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); }} QLabel {{ font-weight: bold; color: {HIGHLIGHT}; padding-top: 15px; padding-bottom: 5px; border: none; font-size: 12px; background: transparent; }} QPushButton.app-btn {{ background-color: transparent; border: none; border-left: 3px solid transparent; text-align: left; padding: 10px 15px; font-size: 14px; border-radius: 6px; }} QPushButton.app-btn:hover {{ background-color: {HOVER_BG}; border-left: 3px solid {HIGHLIGHT}; }} QPushButton.pwr-btn {{ background-color: transparent; border: none; font-size: 18px; padding: 10px; border-radius: 8px; }} QPushButton.pwr-btn:hover {{ background-color: {HOVER_BG}; color: {HIGHLIGHT}; }} QScrollArea {{ border: none; background-color: transparent; }} QScrollBar:vertical {{ border: none; background-color: transparent; width: 6px; margin: 0px; }} QScrollBar::handle:vertical {{ background-color: rgba(255,255,255,0.2); border-radius: 3px; min-height: 30px; }} QScrollBar::handle:vertical:hover {{ background-color: {HIGHLIGHT}; }}")
         main_layout = QVBoxLayout(self); main_layout.setContentsMargins(15, 15, 15, 15)
         
-        user_layout = QHBoxLayout(); lbl_pic = QLabel(); lbl_pic.setFixedSize(40, 40); lbl_pic.setStyleSheet("background-color: rgba(255,255,255,0.1); border-radius: 20px;"); lbl_pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        user_layout = QHBoxLayout(); lbl_pic = QLabel(); lbl_pic.setFixedSize(40, 40)
+        lbl_pic.setStyleSheet("background-color: rgba(255,255,255,0.1); border-radius: 20px;"); lbl_pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
         face_path = os.path.expanduser("~/.face")
         if os.path.exists(face_path): lbl_pic.setPixmap(QPixmap(face_path).scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation))
         else: lbl_pic.setText("👤"); lbl_pic.setStyleSheet("font-size: 24px; background: transparent; border: none;")
@@ -310,6 +336,11 @@ class WangertPanel(QWidget):
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.VLine); sep.setStyleSheet("color: rgba(255,255,255,0.1); margin: 12px 5px;"); self.main_layout.addWidget(sep)
         self.tasks_layout = QHBoxLayout(); self.tasks_layout.setContentsMargins(0,0,0,0); self.tasks_layout.setSpacing(2); self.main_layout.addLayout(self.tasks_layout); self.main_layout.addStretch()
         
+        # SYS-TRAY BUTTONS
+        self.btn_bat = QPushButton("") # Neuer Akku-Button
+        self.btn_bat.setObjectName("sys_tray")
+        self.main_layout.addWidget(self.btn_bat)
+
         self.btn_net = QPushButton("🌐"); self.btn_net.setObjectName("sys_tray"); self.btn_net.clicked.connect(self.toggle_net); self.main_layout.addWidget(self.btn_net)
         self.btn_ctrl = QPushButton("🎛️"); self.btn_ctrl.setObjectName("sys_tray"); self.btn_ctrl.clicked.connect(self.toggle_ctrl); self.main_layout.addWidget(self.btn_ctrl)
         self.btn_clock = QPushButton(); self.btn_clock.setObjectName("sys_tray"); self.btn_clock.clicked.connect(self.toggle_calendar); self.main_layout.addWidget(self.btn_clock)
@@ -319,7 +350,15 @@ class WangertPanel(QWidget):
     def update_system(self):
         self.btn_clock.setText(datetime.now().strftime("%H:%M\n%d.%m."))
         
-        # HIER IST DER FIX FÜR DIE NETZWERK ERKENNUNG (Bulletproof via IP Route)
+        # 1. AKKU AKTUALISIEREN
+        bat_info = get_battery_info()
+        if bat_info:
+            self.btn_bat.setText(bat_info)
+            self.btn_bat.show()
+        else:
+            self.btn_bat.hide() # Unsichtbar wenn kein Akku da ist (z.B. in der VM)
+        
+        # 2. NETZWERK ERKENNUNG (Patched)
         try:
             route = subprocess.check_output(['ip', 'route']).decode('utf-8')
             if "default" in route:
